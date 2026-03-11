@@ -9,6 +9,7 @@ const STORAGE = {
   monthlyGoals: 'sat_monthly_goals',
   dailyLogs:    'sat_daily_logs',
   contractors:  'sat_contractors',
+  profile:      'sat_profile',
 };
 
 const DEFAULT_YEARLY_GOALS = {
@@ -61,6 +62,11 @@ const state = {
   monthlyGoals: {},
   dailyLogs: {},
   contractors: [],
+  profile: { name: '', email: '' },
+  reportMonth: new Date().getMonth(),
+  reportYear:  new Date().getFullYear(),
+  reportTab:   'monthly',
+  reportYearView: new Date().getFullYear(),
 };
 
 // ===== UTILITIES =====
@@ -128,6 +134,7 @@ function loadData() {
   state.monthlyGoals = JSON.parse(localStorage.getItem(STORAGE.monthlyGoals)) || { ...DEFAULT_MONTHLY_GOALS };
   state.dailyLogs    = JSON.parse(localStorage.getItem(STORAGE.dailyLogs))    || {};
   state.contractors  = JSON.parse(localStorage.getItem(STORAGE.contractors))  || [];
+  state.profile      = JSON.parse(localStorage.getItem(STORAGE.profile))      || { name: '', email: '' };
 }
 
 function save(key) {
@@ -197,7 +204,7 @@ function navigate(view) {
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.view === view);
   });
-  const titles = { dashboard:'Dashboard', daily:'Daily Log', contractors:'Contractors', goals:'Goals' };
+  const titles = { dashboard:'Dashboard', daily:'Daily Log', contractors:'Contractors', goals:'Goals', reports:'Reports' };
   document.getElementById('pageTitle').textContent = titles[view] || view;
   renderView();
 }
@@ -205,12 +212,12 @@ function navigate(view) {
 // ===== RENDER ROUTER =====
 function renderView() {
   const el = document.getElementById('mainContent');
-  const actions = document.getElementById('topbarActions');
-  actions.innerHTML = '';
   if (state.view === 'dashboard')   { el.innerHTML = renderDashboard(); }
   if (state.view === 'daily')       { el.innerHTML = renderDailyLog();   attachDailyEvents(); }
   if (state.view === 'contractors') { el.innerHTML = renderContractors(); attachContractorEvents(); }
   if (state.view === 'goals')       { el.innerHTML = renderGoals(); attachGoalEvents(); }
+  if (state.view === 'reports')     { el.innerHTML = renderReports(); attachReportsEvents(); }
+  renderTopbarActions();
 }
 
 // ===== DASHBOARD =====
@@ -811,6 +818,298 @@ function showToast(msg) {
   toastTimer = setTimeout(() => el.classList.add('hidden'), 2500);
 }
 
+// ===== REPORTS =====
+function renderReports() {
+  const { reportMonth: month, reportYear: year, reportTab: tab, reportYearView: yearView } = state;
+  const mp = getMonthProgress(year, month);
+  const mg = state.monthlyGoals;
+  const yp = getYearProgress(yearView);
+  const yg = state.yearlyGoals;
+
+  // Build daily rows for the selected month
+  const days = getDaysInMonth(year, month);
+  const dailyRows = [];
+  for (let d = 1; d <= days; d++) {
+    const key = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const log = state.dailyLogs[key];
+    if (log && (log.calls||log.leads||log.applications||log.loans_closed||log.loan_volume||log.pm_followups||log.recruiting)) {
+      dailyRows.push({ key, d, log, date: new Date(year, month, d) });
+    }
+  }
+
+  // Best day (weighted score)
+  let bestDay = null, bestScore = -1;
+  dailyRows.forEach(r => {
+    const s = (r.log.calls||0) + (r.log.leads||0)*2 + (r.log.applications||0)*3 + (r.log.loans_closed||0)*5;
+    if (s > bestScore) { bestScore = s; bestDay = r; }
+  });
+
+  // Monthly performance score (avg % across 5 metrics)
+  const monthScore = dailyRows.length === 0 ? 0 : Math.round(
+    [pct(mp.calls,mg.calls), pct(mp.leads,mg.leads), pct(mp.applications,mg.applications),
+     pct(mp.loans_closed,mg.closed_loans), pct(mp.loan_volume,mg.loan_volume)]
+    .reduce((a,b) => a+b, 0) / 5
+  );
+
+  // Daily avg (over days actually logged)
+  const daysLogged = dailyRows.length;
+  const avgCalls = daysLogged ? (mp.calls / daysLogged).toFixed(1) : 0;
+  const avgLeads = daysLogged ? (mp.leads / daysLogged).toFixed(1) : 0;
+
+  // Cell color helper
+  function cc(val, goal) {
+    if (!val) return '';
+    return val >= goal ? 'cell-green' : val >= goal * 0.6 ? 'cell-blue' : 'cell-orange';
+  }
+
+  // Score badge helper
+  function scoreBadge(s) {
+    if (s === null || s === undefined) return '<span class="text-muted text-sm">—</span>';
+    const cls = s >= 100 ? 'score-green' : s >= 60 ? 'score-blue' : s >= 30 ? 'score-orange' : 'score-red';
+    return `<span class="score-badge ${cls}">${s}%</span>`;
+  }
+
+  // ---- MONTHLY REPORT HTML ----
+  const monthlyHtml = `
+  <div class="report-nav">
+    <button class="date-nav-btn" id="prevReportMonth">◀</button>
+    <div class="month-label">${fmtMonthYear(month, year)}</div>
+    <button class="date-nav-btn" id="nextReportMonth">▶</button>
+    ${scoreBadge(monthScore)}
+    <span class="text-sm text-muted" style="margin-left:4px">overall score</span>
+  </div>
+
+  <div class="report-info-banner">
+    💡 Data auto-moves to the next month — each day's log is tied to its calendar date. Use ◀ ▶ to navigate between months.
+  </div>
+
+  <div class="stat-grid" style="margin-top:0">
+    <div class="stat-card" style="--stat-color:#7DC245">
+      <div class="stat-label">☎️ Calls</div>
+      <div class="stat-value">${mp.calls}</div>
+      <div class="stat-meta">Goal ${mg.calls} · ${pct(mp.calls,mg.calls)}% · avg ${avgCalls}/day</div>
+    </div>
+    <div class="stat-card" style="--stat-color:#3281B7">
+      <div class="stat-label">📥 Leads</div>
+      <div class="stat-value">${mp.leads}</div>
+      <div class="stat-meta">Goal ${mg.leads} · ${pct(mp.leads,mg.leads)}% · avg ${avgLeads}/day</div>
+    </div>
+    <div class="stat-card" style="--stat-color:#023E66">
+      <div class="stat-label">📝 Applications</div>
+      <div class="stat-value">${mp.applications}</div>
+      <div class="stat-meta">Goal ${mg.applications} · ${pct(mp.applications,mg.applications)}%</div>
+    </div>
+    <div class="stat-card" style="--stat-color:#E3A008">
+      <div class="stat-label">✅ Loans Closed</div>
+      <div class="stat-value">${mp.loans_closed}</div>
+      <div class="stat-meta">Goal ${mg.closed_loans} · ${pct(mp.loans_closed,mg.closed_loans)}%</div>
+    </div>
+    <div class="stat-card" style="--stat-color:#7DC245">
+      <div class="stat-label">💰 Loan Volume</div>
+      <div class="stat-value">${fmt$(mp.loan_volume)}</div>
+      <div class="stat-meta">Goal ${fmt$(mg.loan_volume)} · ${pct(mp.loan_volume,mg.loan_volume)}%</div>
+    </div>
+    <div class="stat-card" style="--stat-color:#3281B7">
+      <div class="stat-label">📅 Days Logged</div>
+      <div class="stat-value">${daysLogged}</div>
+      <div class="stat-meta">of ${mg.working_days} working days target</div>
+    </div>
+  </div>
+
+  ${bestDay ? `<div class="best-day-banner">🏆 Best Day: <strong>${bestDay.date.toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'})}</strong> &nbsp;·&nbsp; ${bestDay.log.calls||0} calls &nbsp;·&nbsp; ${bestDay.log.leads||0} leads &nbsp;·&nbsp; ${bestDay.log.applications||0} apps &nbsp;·&nbsp; ${bestDay.log.loans_closed||0} loans closed</div>` : ''}
+
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <div class="card-title">📋 Daily Breakdown — ${fmtMonthYear(month, year)}</div>
+    </div>
+    <div class="card-body" style="padding:0; overflow-x:auto">
+      ${dailyRows.length === 0
+        ? `<div class="no-data-msg">No activity logged for ${fmtMonthYear(month, year)} yet.<br><span class="text-sm">Go to <strong>Daily Log</strong> to start tracking.</span></div>`
+        : `<table class="report-table">
+          <thead><tr>
+            <th>Date</th><th>Day</th>
+            <th>☎️ Calls<br><small>tgt ${DAILY_TARGETS.calls}</small></th>
+            <th>📥 Leads<br><small>tgt ${DAILY_TARGETS.leads}</small></th>
+            <th>📝 Apps<br><small>tgt ${DAILY_TARGETS.applications}</small></th>
+            <th>✅ Loans<br><small>tgt ${DAILY_TARGETS.loans_closed}</small></th>
+            <th>💰 Volume</th>
+            <th>🛠️ PM</th><th>🔨 Recruit</th>
+            <th>Notes</th>
+          </tr></thead>
+          <tbody>
+            ${dailyRows.map(r => `<tr>
+              <td><strong>${r.date.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</strong></td>
+              <td class="text-muted">${r.date.toLocaleDateString('en-US',{weekday:'short'})}</td>
+              <td class="${cc(r.log.calls, DAILY_TARGETS.calls)}">${r.log.calls||0}</td>
+              <td class="${cc(r.log.leads, DAILY_TARGETS.leads)}">${r.log.leads||0}</td>
+              <td class="${cc(r.log.applications, DAILY_TARGETS.applications)}">${r.log.applications||0}</td>
+              <td class="${cc(r.log.loans_closed, DAILY_TARGETS.loans_closed)}">${r.log.loans_closed||0}</td>
+              <td>${r.log.loan_volume ? fmt$(r.log.loan_volume) : '—'}</td>
+              <td>${r.log.pm_followups||0}</td>
+              <td>${r.log.recruiting||0}</td>
+              <td class="text-sm text-muted">${[r.log.pm_notes, r.log.rec_notes].filter(Boolean).join(' · ')||'—'}</td>
+            </tr>`).join('')}
+          </tbody>
+          <tfoot>
+            <tr class="report-total-row">
+              <td colspan="2"><strong>Total</strong></td>
+              <td><strong>${mp.calls}</strong></td><td><strong>${mp.leads}</strong></td>
+              <td><strong>${mp.applications}</strong></td><td><strong>${mp.loans_closed}</strong></td>
+              <td><strong>${fmt$(mp.loan_volume)}</strong></td>
+              <td><strong>${mp.pm_followups||0}</strong></td><td><strong>${mp.recruiting||0}</strong></td>
+              <td></td>
+            </tr>
+            <tr class="report-goal-row">
+              <td colspan="2" class="text-muted">Monthly Goal</td>
+              <td>${mg.calls}</td><td>${mg.leads}</td>
+              <td>${mg.applications}</td><td>${mg.closed_loans}</td>
+              <td>${fmt$(mg.loan_volume)}</td>
+              <td colspan="3" class="text-muted">—</td>
+            </tr>
+          </tfoot>
+        </table>`
+      }
+    </div>
+  </div>`;
+
+  // ---- YEAR OVERVIEW HTML ----
+  const yearMonths = MONTHS.map((name, m) => {
+    const prog = getMonthProgress(yearView, m);
+    const hasData = prog.calls||prog.leads||prog.applications||prog.loans_closed||prog.loan_volume;
+    const score = !hasData ? null : Math.round(
+      [pct(prog.calls,mg.calls), pct(prog.leads,mg.leads), pct(prog.applications,mg.applications),
+       pct(prog.loans_closed,mg.closed_loans), pct(prog.loan_volume,mg.loan_volume)]
+      .reduce((a,b) => a+b, 0) / 5
+    );
+    return { name, m, prog, score, hasData };
+  });
+
+  const yearScore = (() => {
+    const withData = yearMonths.filter(x => x.hasData);
+    if (!withData.length) return null;
+    return Math.round(withData.reduce((a,x) => a + x.score, 0) / withData.length);
+  })();
+
+  const yearlyHtml = `
+  <div class="report-nav">
+    <button class="date-nav-btn" id="prevReportYear">◀</button>
+    <div class="month-label">${yearView} — Year Overview</div>
+    <button class="date-nav-btn" id="nextReportYear">▶</button>
+    ${yearScore !== null ? scoreBadge(yearScore) : ''}
+    ${yearScore !== null ? '<span class="text-sm text-muted" style="margin-left:4px">avg score</span>' : ''}
+  </div>
+
+  <div class="stat-grid" style="margin-top:16px">
+    <div class="stat-card" style="--stat-color:#7DC245">
+      <div class="stat-label">☎️ Year Calls</div>
+      <div class="stat-value">${yp.calls}</div>
+      <div class="stat-meta">Goal ${yg.calls} · ${pct(yp.calls,yg.calls)}%</div>
+    </div>
+    <div class="stat-card" style="--stat-color:#3281B7">
+      <div class="stat-label">📥 Year Leads</div>
+      <div class="stat-value">${yp.leads}</div>
+      <div class="stat-meta">Goal ${yg.leads} · ${pct(yp.leads,yg.leads)}%</div>
+    </div>
+    <div class="stat-card" style="--stat-color:#023E66">
+      <div class="stat-label">📝 Year Apps</div>
+      <div class="stat-value">${yp.applications}</div>
+      <div class="stat-meta">Goal ${yg.applications} · ${pct(yp.applications,yg.applications)}%</div>
+    </div>
+    <div class="stat-card" style="--stat-color:#E3A008">
+      <div class="stat-label">✅ Year Loans</div>
+      <div class="stat-value">${yp.loans_closed}</div>
+      <div class="stat-meta">Goal ${yg.closed_loans} · ${pct(yp.loans_closed,yg.closed_loans)}%</div>
+    </div>
+    <div class="stat-card" style="--stat-color:#7DC245">
+      <div class="stat-label">💰 Year Volume</div>
+      <div class="stat-value">${fmt$(yp.loan_volume)}</div>
+      <div class="stat-meta">Goal ${fmt$(yg.loan_volume)} · ${pct(yp.loan_volume,yg.loan_volume)}%</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <div class="card-title">📆 Month-by-Month Comparison — ${yearView}</div>
+      <div class="card-subtitle">Green = at/above goal &nbsp;·&nbsp; Blue = 60–99% &nbsp;·&nbsp; Orange = below 60%</div>
+    </div>
+    <div class="card-body" style="padding:0; overflow-x:auto">
+      <table class="report-table">
+        <thead><tr>
+          <th>Month</th>
+          <th>☎️ Calls<br><small>goal ${mg.calls}</small></th>
+          <th>📥 Leads<br><small>goal ${mg.leads}</small></th>
+          <th>📝 Apps<br><small>goal ${mg.applications}</small></th>
+          <th>✅ Loans<br><small>goal ${mg.closed_loans}</small></th>
+          <th>💰 Volume<br><small>goal ${fmt$(mg.loan_volume)}</small></th>
+          <th>⭐ Score</th>
+        </tr></thead>
+        <tbody>
+          ${yearMonths.map(({ name, m, prog, score, hasData }) => {
+            const isCurrent = m === new Date().getMonth() && yearView === new Date().getFullYear();
+            return `<tr class="${isCurrent ? 'current-month-row' : ''} ${!hasData ? 'no-data-row' : ''}">
+              <td><strong>${name.slice(0,3)}</strong>${isCurrent ? ' <span class="stat-badge badge-info" style="font-size:10px;margin-left:4px">Now</span>' : ''}</td>
+              <td class="${cc(prog.calls, mg.calls)}">${prog.calls||'—'}</td>
+              <td class="${cc(prog.leads, mg.leads)}">${prog.leads||'—'}</td>
+              <td class="${cc(prog.applications, mg.applications)}">${prog.applications||'—'}</td>
+              <td class="${cc(prog.loans_closed, mg.closed_loans)}">${prog.loans_closed||'—'}</td>
+              <td class="${cc(prog.loan_volume, mg.loan_volume)}">${prog.loan_volume ? fmt$(prog.loan_volume) : '—'}</td>
+              <td>${scoreBadge(score)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+        <tfoot>
+          <tr class="report-total-row">
+            <td><strong>YTD Total</strong></td>
+            <td><strong>${yp.calls}</strong></td>
+            <td><strong>${yp.leads}</strong></td>
+            <td><strong>${yp.applications}</strong></td>
+            <td><strong>${yp.loans_closed}</strong></td>
+            <td><strong>${fmt$(yp.loan_volume)}</strong></td>
+            <td>${yearScore !== null ? scoreBadge(yearScore) : '—'}</td>
+          </tr>
+          <tr class="report-goal-row">
+            <td class="text-muted">Year Goal</td>
+            <td>${yg.calls}</td><td>${yg.leads}</td>
+            <td>${yg.applications}</td><td>${yg.closed_loans}</td>
+            <td>${fmt$(yg.loan_volume)}</td>
+            <td class="text-muted">—</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>`;
+
+  return `
+  <div class="report-tabs">
+    <button class="rtab ${tab==='monthly'?'active':''}" data-rtab="monthly">📅 Monthly Report</button>
+    <button class="rtab ${tab==='yearly'?'active':''}" data-rtab="yearly">📆 Year Overview</button>
+  </div>
+  <div class="${tab!=='monthly'?'hidden':''}">  ${monthlyHtml}</div>
+  <div class="${tab!=='yearly'?'hidden':''}">  ${yearlyHtml}</div>`;
+}
+
+function attachReportsEvents() {
+  document.querySelectorAll('.rtab').forEach(btn => {
+    btn.onclick = () => { state.reportTab = btn.dataset.rtab; renderView(); };
+  });
+  const pm = document.getElementById('prevReportMonth');
+  const nm = document.getElementById('nextReportMonth');
+  if (pm) pm.onclick = () => {
+    let { reportMonth: m, reportYear: y } = state;
+    m--; if (m < 0) { m = 11; y--; }
+    state.reportMonth = m; state.reportYear = y; renderView();
+  };
+  if (nm) nm.onclick = () => {
+    let { reportMonth: m, reportYear: y } = state;
+    m++; if (m > 11) { m = 0; y++; }
+    state.reportMonth = m; state.reportYear = y; renderView();
+  };
+  const py = document.getElementById('prevReportYear');
+  const ny = document.getElementById('nextReportYear');
+  if (py) py.onclick = () => { state.reportYearView--; renderView(); };
+  if (ny) ny.onclick = () => { state.reportYearView++; renderView(); };
+}
+
 // ===== SIDEBAR TOGGLE =====
 function initSidebarToggle() {
   document.getElementById('sidebarToggle').onclick = () => {
@@ -818,12 +1117,174 @@ function initSidebarToggle() {
   };
 }
 
+// ===== PROFILE =====
+function checkProfile() {
+  if (!state.profile.name) {
+    document.getElementById('welcomeOverlay').classList.remove('hidden');
+    document.getElementById('welcomeName').focus();
+  } else {
+    updateProfileDisplay();
+  }
+}
+
+function updateProfileDisplay() {
+  const name = state.profile.name || 'Set your name';
+  document.getElementById('profileName').textContent = name;
+  document.getElementById('profileAvatar').textContent = name.charAt(0).toUpperCase() || '?';
+  document.getElementById('sidebarDate').textContent = new Date().toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+}
+
+function saveProfile(name, email) {
+  state.profile = { name: name.trim(), email: (email || '').trim() };
+  localStorage.setItem(STORAGE.profile, JSON.stringify(state.profile));
+  updateProfileDisplay();
+}
+
+function openEditProfileModal() {
+  document.getElementById('modalTitle').textContent = '👤 Edit Profile';
+  document.getElementById('modalBody').innerHTML = `
+  <div class="form-group">
+    <label class="form-label">Your Name *</label>
+    <input type="text" class="form-input" id="editProfileName" value="${state.profile.name}" placeholder="e.g. Jane Smith" />
+  </div>
+  <div class="form-group">
+    <label class="form-label">Your Email <span style="font-weight:400;text-transform:none">(for sending reports)</span></label>
+    <input type="email" class="form-input" id="editProfileEmail" value="${state.profile.email || ''}" placeholder="jane@example.com" />
+  </div>`;
+  document.getElementById('modalFooter').innerHTML = `
+  <button class="btn btn-ghost" id="modalCancelBtn">Cancel</button>
+  <button class="btn btn-primary" id="modalSaveProfileBtn">Save</button>`;
+  showModal();
+  document.getElementById('modalCancelBtn').onclick = hideModal;
+  document.getElementById('modalSaveProfileBtn').onclick = () => {
+    const name = document.getElementById('editProfileName').value.trim();
+    if (!name) { alert('Please enter your name.'); return; }
+    saveProfile(name, document.getElementById('editProfileEmail').value);
+    hideModal();
+    showToast('✅ Profile updated!');
+  };
+}
+
+// ===== EXPORT TOPBAR BUTTON =====
+function renderTopbarActions() {
+  const el = document.getElementById('topbarActions');
+  el.innerHTML = `
+  <div class="export-wrap">
+    <button class="btn btn-ghost" id="exportBtn">📤 Export ▾</button>
+    <div class="export-menu hidden" id="exportMenu">
+      <button class="export-menu-item" id="exportCSVBtn"><span>📊</span> Export CSV</button>
+      <button class="export-menu-item" id="exportPDFBtn"><span>🖨️</span> Print / Save PDF</button>
+      <button class="export-menu-item" id="emailReportBtn"><span>📧</span> Email Report</button>
+    </div>
+  </div>`;
+
+  document.getElementById('exportBtn').onclick = (e) => {
+    e.stopPropagation();
+    document.getElementById('exportMenu').classList.toggle('hidden');
+  };
+  document.addEventListener('click', () => {
+    const m = document.getElementById('exportMenu');
+    if (m) m.classList.add('hidden');
+  }, { once: true });
+
+  document.getElementById('exportCSVBtn').onclick   = exportCSV;
+  document.getElementById('exportPDFBtn').onclick   = exportPDF;
+  document.getElementById('emailReportBtn').onclick = emailReport;
+}
+
+// ===== EXPORT CSV =====
+function exportCSV() {
+  const name = state.profile.name || 'Unknown';
+  const rows = [['Name','Date','Calls','Leads','Applications','Loans Closed','PM Follow-ups','PM Notes','Recruiting','Recruiting Notes','Loan Volume ($)']];
+  const sorted = Object.keys(state.dailyLogs).sort();
+  sorted.forEach(date => {
+    const l = state.dailyLogs[date];
+    if (!l) return;
+    const hasData = l.calls || l.leads || l.applications || l.loans_closed || l.pm_followups || l.recruiting || l.loan_volume;
+    if (!hasData) return;
+    rows.push([
+      name, date,
+      l.calls || 0, l.leads || 0, l.applications || 0, l.loans_closed || 0,
+      l.pm_followups || 0, `"${(l.pm_notes || '').replace(/"/g,'""')}"`,
+      l.recruiting || 0, `"${(l.rec_notes || '').replace(/"/g,'""')}"`,
+      l.loan_volume || 0,
+    ]);
+  });
+  if (rows.length === 1) { showToast('No data to export yet.'); return; }
+  const csv = rows.map(r => r.join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `sales-tracker-${name.replace(/\s+/g,'-')}-${todayStr()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('✅ CSV downloaded!');
+}
+
+// ===== PRINT / PDF =====
+function exportPDF() {
+  const name = state.profile.name || '';
+  const now  = new Date();
+  const hdr  = document.createElement('div');
+  hdr.className = 'print-header';
+  hdr.innerHTML = `📊 Sales Activities Tracker${name ? ' — ' + name : ''} &nbsp;|&nbsp; Printed ${now.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}`;
+  document.querySelector('.main-content').prepend(hdr);
+  window.print();
+  hdr.remove();
+}
+
+// ===== EMAIL REPORT =====
+function emailReport() {
+  const now   = new Date();
+  const year  = now.getFullYear();
+  const month = now.getMonth();
+  const mp    = getMonthProgress(year, month);
+  const mg    = state.monthlyGoals;
+  const name  = state.profile.name || 'Team Member';
+  const to    = state.profile.email || '';
+
+  const subject = encodeURIComponent(`Sales Activity Report — ${name} — ${MONTHS[month]} ${year}`);
+
+  const body = encodeURIComponent(
+`Sales Activity Report
+=====================
+Name:  ${name}
+Month: ${MONTHS[month]} ${year}
+Date:  ${now.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}
+
+MONTHLY PROGRESS
+─────────────────────────────
+☎️  Calls to Contractors:  ${mp.calls} / ${mg.calls}  (${pct(mp.calls, mg.calls)}%)
+📥  New Leads Identified:  ${mp.leads} / ${mg.leads}  (${pct(mp.leads, mg.leads)}%)
+📝  Applications Submitted: ${mp.applications} / ${mg.applications}  (${pct(mp.applications, mg.applications)}%)
+✅  Loans Closed:           ${mp.loans_closed} / ${mg.closed_loans}  (${pct(mp.loans_closed, mg.closed_loans)}%)
+💰  Loan Volume Closed:     $${Number(mp.loan_volume).toLocaleString()} / $${Number(mg.loan_volume).toLocaleString()}  (${pct(mp.loan_volume, mg.loan_volume)}%)
+
+TODAY'S ACTIVITY (${fmtDateDisplay(todayStr())})
+─────────────────────────────
+${(() => {
+  const t = state.dailyLogs[todayStr()] || {};
+  return `☎️  Calls:         ${t.calls || 0}
+📥  Leads:         ${t.leads || 0}
+📝  Applications:  ${t.applications || 0}
+✅  Loans Closed: ${t.loans_closed || 0}
+💰  Loan Volume:  $${Number(t.loan_volume || 0).toLocaleString()}
+${t.pm_notes ? '🛠️  PM Notes: ' + t.pm_notes : ''}
+${t.rec_notes ? '🔨  Recruiting Notes: ' + t.rec_notes : ''}`.trim();
+})()}
+
+─────────────────────────────
+Sent from Sales Activities Tracker (SELF)
+`);
+
+  window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+  showToast('📧 Opening email client...');
+}
+
 // ===== INIT =====
 function init() {
   loadData();
-
-  // Sidebar date
-  document.getElementById('sidebarDate').textContent = new Date().toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' });
 
   // Nav listeners
   document.querySelectorAll('.nav-item').forEach(el => {
@@ -834,7 +1295,22 @@ function init() {
   document.getElementById('modalClose').onclick = hideModal;
   document.getElementById('modalOverlay').onclick = (e) => { if (e.target === e.currentTarget) hideModal(); };
 
+  // Profile edit button
+  document.getElementById('editProfileBtn').onclick = openEditProfileModal;
+
+  // Welcome screen
+  document.getElementById('welcomeStartBtn').onclick = () => {
+    const name = document.getElementById('welcomeName').value.trim();
+    if (!name) { document.getElementById('welcomeName').focus(); document.getElementById('welcomeName').style.borderColor = 'var(--danger)'; return; }
+    const email = document.getElementById('welcomeEmail').value.trim();
+    saveProfile(name, email);
+    document.getElementById('welcomeOverlay').classList.add('hidden');
+    showToast(`👋 Welcome, ${name}!`);
+  };
+  document.getElementById('welcomeName').onkeydown = (e) => { if (e.key === 'Enter') document.getElementById('welcomeStartBtn').click(); };
+
   initSidebarToggle();
+  checkProfile();
   navigate('dashboard');
 }
 

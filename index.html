@@ -38,12 +38,42 @@
           <span class="nav-icon">🎯</span>
           <span>Goals</span>
         </a>
+        <a class="nav-item" data-view="reports" href="#">
+          <span class="nav-icon">📈</span>
+          <span>Reports</span>
+        </a>
       </nav>
 
       <div class="sidebar-footer">
-        <div class="sidebar-date" id="sidebarDate"></div>
+        <div class="profile-section" id="profileSection">
+          <div class="profile-avatar" id="profileAvatar">?</div>
+          <div class="profile-info">
+            <div class="profile-name" id="profileName">Set your name</div>
+            <div class="profile-date" id="sidebarDate"></div>
+          </div>
+          <button class="profile-edit-btn" id="editProfileBtn" title="Edit profile">✏️</button>
+        </div>
       </div>
     </aside>
+
+    <!-- Welcome Screen -->
+    <div class="welcome-overlay hidden" id="welcomeOverlay">
+      <div class="welcome-card">
+        <div class="welcome-logo">📊</div>
+        <h1 class="welcome-title">Sales Activities Tracker</h1>
+        <p class="welcome-sub">SELF · Solar & Energy Loan Fund</p>
+        <p class="welcome-desc">Track your daily calls, leads, applications, and loans. Enter your name to get started.</p>
+        <div class="form-group" style="text-align:left">
+          <label class="form-label">Your Name *</label>
+          <input type="text" class="form-input" id="welcomeName" placeholder="e.g. Jane Smith" autofocus />
+        </div>
+        <div class="form-group" style="text-align:left">
+          <label class="form-label">Your Email <span style="font-weight:400;text-transform:none">(optional — for sending reports)</span></label>
+          <input type="email" class="form-input" id="welcomeEmail" placeholder="jane@example.com" />
+        </div>
+        <button class="btn btn-primary w-full" id="welcomeStartBtn" style="margin-top:8px;padding:12px;font-size:15px">Get Started →</button>
+      </div>
+    </div>
 
     <!-- Main wrapper -->
     <div class="main-wrapper">
